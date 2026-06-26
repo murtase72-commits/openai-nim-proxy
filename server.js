@@ -25,7 +25,7 @@ const SHOW_REASONING = false; // Set to true to show reasoning with <think> tags
 
 // 🔥 THINKING MODE TOGGLE - Enables thinking for models that support it
 // Each model in THINKING_MODELS gets its own correct parameter format
-const ENABLE_THINKING_MODE = true; // Set to true to enable per-model thinking params
+const ENABLE_THINKING_MODE = false; // Set to true to enable per-model thinking params
 
 // Per-model thinking parameters — each model has its own correct format
 const THINKING_MODELS = {
@@ -88,19 +88,34 @@ app.post('/v1/chat/completions', async (req, res) => {
     const nimModel = MODEL_MAPPING[model] || resolveFallbackModel(model);
 
     // Build per-model thinking params (spread directly into body, not extra_body)
-    const thinkingParams = (ENABLE_THINKING_MODE && THINKING_MODELS[nimModel])
-      ? THINKING_MODELS[nimModel]
-      : {};
+    const thinkingActive = ENABLE_THINKING_MODE && !!THINKING_MODELS[nimModel];
+    const thinkingParams = thinkingActive ? THINKING_MODELS[nimModel] : {};
+
+    // GLM-5.1 thinking mode has strict restrictions:
+    //   - temperature must be exactly 0.6 (ignore client override)
+    //   - max_tokens capped at 4096
+    const isGLM = nimModel === 'z-ai/glm-5.1';
+
+    const resolvedTemperature = (isGLM && thinkingActive)
+      ? 0.6                          // GLM-5.1 thinking requires exactly 0.6
+      : (temperature || 0.6);
+
+    const resolvedMaxTokens = (isGLM && thinkingActive)
+      ? Math.min(max_tokens || 4096, 4096)   // GLM-5.1 thinking caps at 4096
+      : Math.min(max_tokens || 8192, 8192);  // safe default for all other models
 
     // Transform OpenAI request to NIM format
     const nimRequest = {
       model: nimModel,
       messages: messages,
-      temperature: temperature || 0.6,
-      max_tokens: max_tokens || 16000,
+      temperature: resolvedTemperature,
+      max_tokens: resolvedMaxTokens,
       stream: stream || false,
       ...thinkingParams  // Spread thinking params directly — no extra_body wrapper
     };
+
+    // Debug log — remove once stable
+    console.log('NIM Request:', JSON.stringify({ ...nimRequest, messages: '[omitted]' }, null, 2));
 
     // Make request to NVIDIA NIM API
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
