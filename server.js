@@ -25,7 +25,7 @@ const SHOW_REASONING = false; // Set to true to show reasoning with <think> tags
 
 // 🔥 THINKING MODE TOGGLE - Enables thinking for models that support it
 // Each model in THINKING_MODELS gets its own correct parameter format
-const ENABLE_THINKING_MODE = false; // Set to true to enable per-model thinking params
+const ENABLE_THINKING_MODE = true; // Set to true to enable per-model thinking params
 
 // Per-model thinking parameters — each model has its own correct format
 const THINKING_MODELS = {
