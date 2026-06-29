@@ -36,7 +36,7 @@ const ENABLE_THINKING_MODE = true;
 // false           → preserves reasoning_content across turns (Preserved Thinking mode)
 //                   requires forwarding full unmodified reasoning_content in messages
 // ─────────────────────────────────────────────
-const CLEAR_THINKING_HISTORY = true;
+const CLEAR_THINKING_HISTORY = false;
 
 // ─────────────────────────────────────────────
 // Model mapping
