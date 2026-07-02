@@ -27,7 +27,7 @@ const SHOW_REASONING = false;
 // GLM-5.1 uses: { thinking: { type: "enabled" } }
 // NOTE: chat_template_kwargs is NOT used for GLM-5.1 — that was for Nemotron-style models.
 // ─────────────────────────────────────────────
-const ENABLE_THINKING_MODE = false;
+const ENABLE_THINKING_MODE = true;
 
 // ─────────────────────────────────────────────
 // 🔥 CLEAR THINKING TOGGLE
@@ -46,7 +46,7 @@ const MODEL_MAPPING = {
   'gpt-3.5-turbo':  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
   'gpt-4':          'qwen/qwen3-coder-480b-a35b-instruct',
   'gpt-4-turbo':    'moonshotai/kimi-k2-instruct-0905',
-  'gpt-4o':         'z-ai/glm-5.1',       // ← GLM-5.1 as the primary "gpt-4o" alias
+  'gpt-4o':         'z-ai/glm-5.2',       // ← GLM-5.1 as the primary "gpt-4o" alias
   'claude-3-opus':  'openai/gpt-oss-120b',
   'claude-3-sonnet':'openai/gpt-oss-20b',
   'gemini-pro':     'qwen/qwen3-next-80b-a3b-thinking'
