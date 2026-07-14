@@ -27,7 +27,7 @@ const SHOW_REASONING = false;
 // GLM-5.1 uses: { thinking: { type: "enabled" } }
 // NOTE: chat_template_kwargs is NOT used for GLM-5.1 — that was for Nemotron-style models.
 // ─────────────────────────────────────────────
-const ENABLE_THINKING_MODE = false;
+const ENABLE_THINKING_MODE = true;
 
 // ─────────────────────────────────────────────
 // 🔥 CLEAR THINKING TOGGLE
