@@ -1,4 +1,4 @@
-// server.js - OpenAI to NVIDIA NIM API Proxy (GLM-5.1 compatible)
+// server.js - OpenAI to NVIDIA NIM API Proxy (GLM-5.1 / GLM-5.2 compatible)
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -23,9 +23,19 @@ const SHOW_REASONING = false;
 
 // ─────────────────────────────────────────────
 // 🔥 THINKING MODE TOGGLE
-// Enables the Z.AI / GLM native thinking parameter.
-// GLM-5.1 uses: { thinking: { type: "enabled" } }
-// NOTE: chat_template_kwargs is NOT used for GLM-5.1 — that was for Nemotron-style models.
+// Controls reasoning for ALL models routed through NVIDIA NIM (GLM, Nemotron,
+// Qwen-thinking, etc). NIM serves everything through vLLM/SGLang chat
+// templates, and they all read the SAME chat_template_kwargs.enable_thinking
+// flag at the top level of the request body — this applies to GLM-5.1/5.2
+// too, not just Nemotron-style models.
+//
+// (The nested `thinking: { type: "enabled" }` object is the DIRECT Z.ai
+// API's native schema — that's only relevant if you call api.z.ai yourself,
+// not through NIM. Using it here was sending a field NIM doesn't read.)
+//
+// This value is now ALWAYS sent explicitly (see buildThinkingParams below),
+// even when false — GLM-5.1/5.2 default to thinking ENABLED if the param is
+// omitted entirely, so "off" has to be said out loud, not implied by silence.
 // ─────────────────────────────────────────────
 const ENABLE_THINKING_MODE = false;
 
@@ -40,22 +50,23 @@ const CLEAR_THINKING_HISTORY = false;
 
 // ─────────────────────────────────────────────
 // Model mapping
-// GLM-5.1 is accessed via NVIDIA NIM as "z-ai/glm-5.1"
+// GLM-5.2 is accessed via NVIDIA NIM as "z-ai/glm-5.2"
 // ─────────────────────────────────────────────
 const MODEL_MAPPING = {
   'gpt-3.5-turbo':  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
   'gpt-4':          'qwen/qwen3-coder-480b-a35b-instruct',
   'gpt-4-turbo':    'moonshotai/kimi-k2-instruct-0905',
-  'gpt-4o':         'z-ai/glm-5.2',       // ← GLM-5.1 as the primary "gpt-4o" alias
+  'gpt-4o':         'z-ai/glm-5.2',       // ← GLM-5.2 as the primary "gpt-4o" alias
   'claude-3-opus':  'openai/gpt-oss-120b',
   'claude-3-sonnet':'openai/gpt-oss-20b',
   'gemini-pro':     'qwen/qwen3-next-80b-a3b-thinking'
 };
 
 // ─────────────────────────────────────────────
-// Models that use the Z.AI / GLM thinking schema:
-//   { thinking: { type: "enabled"|"disabled", clear_thinking: bool } }
-// All other models fall back to chat_template_kwargs (Nemotron-style).
+// GLM models — used below ONLY to pick the right default temperature
+// (GLM defaults to 1.0, most other NIM models default to 0.6).
+// Thinking-mode params are unified across ALL NIM models via
+// chat_template_kwargs, so this set no longer branches that logic.
 // ─────────────────────────────────────────────
 const GLM_THINKING_MODELS = new Set([
   'z-ai/glm-5.1',
@@ -68,26 +79,23 @@ const GLM_THINKING_MODELS = new Set([
 ]);
 
 /**
- * Build the thinking/reasoning parameters for a given resolved model name.
- * Returns a partial request object to be spread into the NIM request body.
+ * Build the thinking/reasoning parameters for the outgoing NIM request.
+ *
+ * NVIDIA NIM serves every model (GLM, Nemotron, Qwen-thinking, etc.) through
+ * vLLM/SGLang chat templates, and they all read chat_template_kwargs at the
+ * TOP LEVEL of the request body — so one schema covers all of them here.
+ * (Previously this used extra_body: {...}, which is an OpenAI *client SDK*
+ * convention for folding params into the body — since this proxy builds the
+ * JSON body itself via axios, that wrapper key was just inert; NIM never saw it.)
+ *
+ * Always returns an explicit true/false — never omits the field — since
+ * GLM-5.1/5.2 default to thinking ENABLED when it's left unset.
  */
-function buildThinkingParams(nimModel) {
-  if (!ENABLE_THINKING_MODE) return {};
-
-  if (GLM_THINKING_MODELS.has(nimModel)) {
-    // Z.AI native thinking schema (GLM-5.1 / GLM-5.x)
-    return {
-      thinking: {
-        type: 'enabled',
-        clear_thinking: CLEAR_THINKING_HISTORY
-      }
-    };
-  }
-
-  // Nemotron / Qwen / other NIM models — use chat_template_kwargs
+function buildThinkingParams() {
   return {
-    extra_body: {
-      chat_template_kwargs: { thinking: true }
+    chat_template_kwargs: {
+      enable_thinking: ENABLE_THINKING_MODE,
+      clear_thinking: CLEAR_THINKING_HISTORY
     }
   };
 }
@@ -156,7 +164,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
 
     // ── Build NIM request ─────────────────────
-    // GLM-5.1 default temperature is 1.0 (not 0.6 like GLM-4.5)
+    // GLM-5.x default temperature is 1.0 (not 0.6 like GLM-4.5)
     const isGlm = GLM_THINKING_MODELS.has(nimModel);
     const defaultTemp = isGlm ? 1.0 : 0.6;
 
@@ -166,7 +174,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       temperature: temperature ?? defaultTemp,
       max_tokens: max_tokens || 9024,
       stream: stream || false,
-      ...buildThinkingParams(nimModel)
+      ...buildThinkingParams()
     };
 
     // ── Fire request ──────────────────────────
@@ -205,7 +213,7 @@ app.post('/v1/chat/completions', async (req, res) => {
             const delta = data.choices?.[0]?.delta;
             if (!delta) { res.write(`data: ${JSON.stringify(data)}\n\n`); return; }
 
-            // GLM-5.1 streams reasoning in delta.reasoning_content
+            // GLM-5.x streams reasoning in delta.reasoning_content
             const reasoning = delta.reasoning_content;
             const content   = delta.content;
 
@@ -256,7 +264,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         choices: response.data.choices.map(choice => {
           let fullContent = choice.message?.content || '';
 
-          // GLM-5.1 returns reasoning in message.reasoning_content
+          // GLM-5.x returns reasoning in message.reasoning_content
           if (SHOW_REASONING && choice.message?.reasoning_content) {
             fullContent =
               '<think>\n' +
