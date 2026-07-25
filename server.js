@@ -19,7 +19,7 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 // true  → wraps reasoning in <think>…</think> and prepends it to the response
 // false → strips reasoning from output entirely
 // ─────────────────────────────────────────────
-const SHOW_REASONING = false;
+const SHOW_REASONING = true;
 
 // ─────────────────────────────────────────────
 // 🔥 THINKING MODE TOGGLE
