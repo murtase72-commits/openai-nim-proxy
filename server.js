@@ -61,7 +61,7 @@ app.get('/v1/models', (req, res) => {
 
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    const { model, messages, temperature, max_tokens, stream } = req.body;
+    const { model, messages, temperature, max_tokens, top_p, frequency_penalty, presence_penalty, stream } = req.body;
     let nimModel = MODEL_MAPPING[model];
 
     if (!nimModel) {
@@ -97,6 +97,9 @@ app.post('/v1/chat/completions', async (req, res) => {
       messages,
       temperature: temperature ?? defaultTemp,
       max_tokens: max_tokens || DEFAULT_MAX_TOKENS,
+      top_p,
+      frequency_penalty,
+      presence_penalty,
       stream: stream || false,
       ...buildThinkingParams()
     };
