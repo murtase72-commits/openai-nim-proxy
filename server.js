@@ -20,7 +20,7 @@ const CLEAR_THINKING_HISTORY = false;
 
 const MODEL_MAPPING = {
   'gpt-3.5-turbo':  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-  'gpt-4':          'qwen/qwen3-coder-480b-a35b-instruct',
+  'gpt-4':          'moonshotai/kimi-k2.6',
   'gpt-4-turbo':    'deepseek-ai/deepseek-v4-pro',
   'gpt-4o':         'z-ai/glm-5.2',
   'claude-3-opus':  'openai/gpt-oss-120b',
