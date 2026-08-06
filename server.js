@@ -6,21 +6,23 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Middleware
 app.use(cors());
-app.use(express.json({ limit: '100mb' }));
+app.use(express.json({ limit: '25mb' })); // was: 100kb default, caused 413s
 
+// NVIDIA NIM API configuration
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
-const DEFAULT_MAX_TOKENS = parseInt(process.env.DEFAULT_MAX_TOKENS || '32768', 10);
+const DEFAULT_MAX_TOKENS = parseInt(process.env.DEFAULT_MAX_TOKENS || '16384', 10);
 
 const SHOW_REASONING = false;
 const ENABLE_THINKING_MODE = true;
-const CLEAR_THINKING_HISTORY = false;
+const CLEAR_THINKING_HISTORY = true;
 
 const MODEL_MAPPING = {
   'gpt-3.5-turbo':  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-  'gpt-4':          'moonshotai/kimi-k2.6',
+  'gpt-4':          'qwen/qwen3-coder-480b-a35b-instruct',
   'gpt-4-turbo':    'deepseek-ai/deepseek-v4-pro',
   'gpt-4o':         'z-ai/glm-5.2',
   'claude-3-opus':  'openai/gpt-oss-120b',
@@ -61,7 +63,7 @@ app.get('/v1/models', (req, res) => {
 
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    const { model, messages, temperature, max_tokens, top_p, frequency_penalty, presence_penalty, stream } = req.body;
+    const { model, messages, temperature, max_tokens, stream } = req.body;
     let nimModel = MODEL_MAPPING[model];
 
     if (!nimModel) {
@@ -97,9 +99,6 @@ app.post('/v1/chat/completions', async (req, res) => {
       messages,
       temperature: temperature ?? defaultTemp,
       max_tokens: max_tokens || DEFAULT_MAX_TOKENS,
-      top_p,
-      frequency_penalty,
-      presence_penalty,
       stream: stream || false,
       ...buildThinkingParams()
     };
