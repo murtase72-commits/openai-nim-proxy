@@ -14,7 +14,7 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 
 const DEFAULT_MAX_TOKENS = parseInt(process.env.DEFAULT_MAX_TOKENS || '32768', 10);
 
-const SHOW_REASONING = false;
+const SHOW_REASONING = true;
 const ENABLE_THINKING_MODE = true;
 const CLEAR_THINKING_HISTORY = false;
 
