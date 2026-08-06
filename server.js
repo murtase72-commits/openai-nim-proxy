@@ -18,7 +18,7 @@ const DEFAULT_MAX_TOKENS = parseInt(process.env.DEFAULT_MAX_TOKENS || '16384', 1
 
 const SHOW_REASONING = false;
 const ENABLE_THINKING_MODE = true;
-const CLEAR_THINKING_HISTORY = true;
+const CLEAR_THINKING_HISTORY = false;
 
 const MODEL_MAPPING = {
   'gpt-3.5-turbo':  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
