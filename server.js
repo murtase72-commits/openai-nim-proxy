@@ -52,7 +52,7 @@ const SHOW_REASONING = false;
 // even when false — GLM-5.1/5.2 default to thinking ENABLED if the param is
 // omitted entirely, so "off" has to be said out loud, not implied by silence.
 // ─────────────────────────────────────────────
-const ENABLE_THINKING_MODE = true;
+const ENABLE_THINKING_MODE = false;
 
 // ─────────────────────────────────────────────
 // 🔥 CLEAR THINKING TOGGLE
