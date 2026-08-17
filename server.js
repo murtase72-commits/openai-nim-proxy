@@ -2,6 +2,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const { StringDecoder } = require('string_decoder');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,7 +26,8 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 // window as your prompt (character card + persona + chat history). See the
 // comment on DEFAULT_MAX_TOKENS's value below for the real ceiling on GLM-5.2.
 // ─────────────────────────────────────────────
-const DEFAULT_MAX_TOKENS = parseInt(process.env.DEFAULT_MAX_TOKENS || '32768', 10); // 32768 = NVIDIA's documented max for this param
+const DEFAULT_MAX_TOKENS = parseInt(process.env.DEFAULT_MAX_TOKENS || '32768', 10);
+const NIM_MAX_RETRIES = parseInt(process.env.NIM_MAX_RETRIES || '3', 10); // 32768 = NVIDIA's documented max for this param
 
 // ─────────────────────────────────────────────
 // 🔥 REASONING DISPLAY TOGGLE
@@ -135,6 +137,59 @@ function stripHiddenLedger(text) {
 }
 
 // ─────────────────────────────────────────────
+// Fix two real GFM/Markdown rule violations the model can produce that
+// Janitor's renderer will NOT forgive:
+// 1) Bold breaks if whitespace touches the ** delimiters ("** text**" etc.)
+// 2) A table needs a blank line before its first "|" row, or it prints raw
+// ─────────────────────────────────────────────
+function normalizeFormatting(text) {
+  if (!text) return text;
+  let out = text;
+
+  out = out.replace(/\*\*\s*([^*\n]*?)\s*\*\*/g, '**$1**');
+  out = out.replace(/([^\n|])\n(\|)/g, '$1\n\n$2');
+  out = out.replace(/\n{3,}/g, '\n\n');
+
+  return out;
+}
+
+// ─────────────────────────────────────────────
+// Retries a NIM request on 429 (rate limit) instead of failing immediately.
+// Respects NIM's Retry-After header if it sends one; otherwise falls back to
+// exponential backoff (1s, 2s, 4s...). Any non-429 error still throws right away.
+// ─────────────────────────────────────────────
+async function postToNimWithRetry(nimRequest, isStream) {
+  let lastError;
+  for (let attempt = 0; attempt <= NIM_MAX_RETRIES; attempt++) {
+    try {
+      return await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
+        headers: {
+          Authorization: `Bearer ${NIM_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        responseType: isStream ? 'stream' : 'json'
+      });
+    } catch (err) {
+      lastError = err;
+      const status = err.response?.status;
+      if (status !== 429 || attempt === NIM_MAX_RETRIES) throw err;
+
+      const retryAfterHeader = err.response.headers?.['retry-after'];
+      const retryAfterSec = retryAfterHeader ? parseFloat(retryAfterHeader) : null;
+      const backoffMs = retryAfterSec ? retryAfterSec * 1000 : 2 ** attempt * 1000;
+
+      console.warn(
+        `[NIM 429] rate limited — retry ${attempt + 1}/${NIM_MAX_RETRIES} in ${backoffMs}ms`,
+        { retryAfterHeader, body: err.response?.data }
+      );
+
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+    }
+  }
+  throw lastError;
+}
+
+// ─────────────────────────────────────────────
 // Health check
 // ─────────────────────────────────────────────
 app.get('/health', (req, res) => {
@@ -214,14 +269,8 @@ app.post('/v1/chat/completions', async (req, res) => {
       ...buildThinkingParams()
     };
 
-    // ── Fire request ──────────────────────────
-    const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
-      headers: {
-        Authorization: `Bearer ${NIM_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      responseType: stream ? 'stream' : 'json'
-    });
+    // ── Fire request (retries automatically on 429) ───
+    const response = await postToNimWithRetry(nimRequest, stream);
 
     // ── Streaming response ────────────────────
     if (stream) {
@@ -230,103 +279,60 @@ app.post('/v1/chat/completions', async (req, res) => {
       res.setHeader('Connection', 'keep-alive');
 
       let buffer = '';
-      let reasoningStarted = false;
-      let ledgerStarted = false;   // true once the <CONCEALED:/<STATE_VARS: tag has been seen
-      let held = '';                // small rolling buffer so a tag split across chunks is still caught
-      const HOLD_CHARS = 20;        // longer than "<STATE_VARS:" so a split tag can't slip through
+      const decoder = new StringDecoder('utf8'); // holds back incomplete multi-byte chars (emoji, em-dashes) until complete
+      let fullContent = '';
+      let fullReasoning = '';
 
-      // Filters delta.content through the ledger check before it's ever written to the client.
-      // Delays emitting the last HOLD_CHARS characters until we're sure they aren't the start
-      // of a ledger tag; once the tag is confirmed, everything from there on is dropped.
-      function filterLedger(newText) {
-        if (!newText) return '';
-        if (ledgerStarted) return '';
-
-        held += newText;
-        const idx = held.search(LEDGER_RE);
-        if (idx !== -1) {
-          ledgerStarted = true;
-          const safe = held.slice(0, idx);
-          held = '';
-          return safe;
-        }
-
-        if (held.length > HOLD_CHARS) {
-          const release = held.slice(0, held.length - HOLD_CHARS);
-          held = held.slice(held.length - HOLD_CHARS);
-          return release;
-        }
-        return '';
-      }
-
+      // Collect the ENTIRE reply first instead of forwarding deltas live —
+      // ledger-stripping and Markdown fixes both need to see complete spans
+      // (a full bold run, a full table) that streaming doesn't have yet.
       response.data.on('data', chunk => {
-        buffer += chunk.toString();
+        buffer += decoder.write(chunk);
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
         lines.forEach(line => {
           if (!line.startsWith('data: ')) return;
-
-          if (line.includes('[DONE]')) {
-            res.write(line + '\n');
-            return;
-          }
+          if (line.includes('[DONE]')) return; // our own [DONE] is sent after processing
 
           try {
             const data = JSON.parse(line.slice(6));
             const delta = data.choices?.[0]?.delta;
-            if (!delta) { res.write(`data: ${JSON.stringify(data)}\n\n`); return; }
-
-            // GLM-5.x streams reasoning in delta.reasoning_content
-            const reasoning = delta.reasoning_content;
-            const content   = filterLedger(delta.content);
-
-            if (SHOW_REASONING) {
-              let combined = '';
-
-              if (reasoning && !reasoningStarted) {
-                combined = '<think>\n' + reasoning;
-                reasoningStarted = true;
-              } else if (reasoning) {
-                combined = reasoning;
-              }
-
-              if (content && reasoningStarted) {
-                combined += '\n</think>\n\n' + content;
-                reasoningStarted = false;
-              } else if (content) {
-                combined += content;
-              }
-
-              if (combined) {
-                delta.content = combined;
-                delete delta.reasoning_content;
-              }
-            } else {
-              // Strip reasoning entirely
-              delta.content = content || '';
-              delete delta.reasoning_content;
-            }
-
-            res.write(`data: ${JSON.stringify(data)}\n\n`);
-          } catch (_) {
-            res.write(line + '\n');
-          }
+            if (!delta) return;
+            if (delta.content) fullContent += delta.content;
+            if (delta.reasoning_content) fullReasoning += delta.reasoning_content;
+          } catch (_) { /* ignore unparsable lines */ }
         });
       });
 
       response.data.on('end', () => {
-        // If the stream ended and nothing ever triggered the ledger filter,
-        // release whatever was still being held back — otherwise the last
-        // ~20 characters of every normal reply get silently eaten.
-        if (!ledgerStarted && held) {
-          const finalChunk = {
+        buffer += decoder.end(); // flush any trailing partial character
+
+        let finalText = normalizeFormatting(stripHiddenLedger(fullContent));
+        if (SHOW_REASONING && fullReasoning) {
+          finalText = '<think>\n' + fullReasoning + '\n</think>\n\n' + finalText;
+        }
+
+        // Flush the cleaned text back out in small pieces so Janitor still
+        // shows a typing effect, even though it's no longer truly live —
+        // nothing is sent until generation is fully done server-side.
+        const CHUNK_SIZE = 12;
+        for (let i = 0; i < finalText.length; i += CHUNK_SIZE) {
+          const piece = {
             id: `chatcmpl-${Date.now()}`,
             object: 'chat.completion.chunk',
-            choices: [{ index: 0, delta: { content: held }, finish_reason: null }]
+            choices: [{ index: 0, delta: { content: finalText.slice(i, i + CHUNK_SIZE) }, finish_reason: null }]
           };
-          res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
+          res.write(`data: ${JSON.stringify(piece)}\n\n`);
         }
+
+        const finishChunk = {
+          id: `chatcmpl-${Date.now()}`,
+          object: 'chat.completion.chunk',
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
+        };
+        res.write(`data: ${JSON.stringify(finishChunk)}\n\n`);
+        res.write('data: [DONE]\n\n');
         res.end();
       });
       response.data.on('error', err => { console.error('Stream error:', err); res.end(); });
@@ -339,7 +345,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         created: Math.floor(Date.now() / 1000),
         model,
         choices: response.data.choices.map(choice => {
-          let fullContent = stripHiddenLedger(choice.message?.content || '');
+          let fullContent = normalizeFormatting(stripHiddenLedger(choice.message?.content || ''));
 
           // GLM-5.x returns reasoning in message.reasoning_content
           if (SHOW_REASONING && choice.message?.reasoning_content) {
@@ -367,12 +373,20 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Proxy error:', error.message);
-    res.status(error.response?.status || 500).json({
+    const status = error.response?.status || 500;
+    if (status === 429) {
+      console.error(`[NIM 429] all ${NIM_MAX_RETRIES} retries exhausted — still rate limited.`, {
+        retryAfter: error.response?.headers?.['retry-after'],
+        body: error.response?.data
+      });
+    } else {
+      console.error('Proxy error:', error.message);
+    }
+    res.status(status).json({
       error: {
         message: error.message || 'Internal server error',
         type:    'invalid_request_error',
-        code:    error.response?.status || 500
+        code:    status
       }
     });
   }
