@@ -17,7 +17,7 @@ const DEFAULT_MAX_TOKENS = parseInt(process.env.DEFAULT_MAX_TOKENS || '32768', 1
 
 const SHOW_REASONING = false;
 const ENABLE_THINKING_MODE = true;
-const CLEAR_THINKING_HISTORY = true;
+const CLEAR_THINKING_HISTORY = false;
 
 const MODEL_MAPPING = {
   'gpt-3.5-turbo':  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
@@ -49,15 +49,6 @@ function stripHiddenLedger(text) {
   if (!text) return text;
   const idx = text.search(LEDGER_RE);
   return (idx === -1 ? text : text.slice(0, idx)).trim();
-}
-
-function normalizeFormatting(text) {
-  if (!text) return text;
-  let out = text;
-  out = out.replace(/\*\*\s*([^*\n]*?)\s*\*\*/g, '**$1**');
-  out = out.replace(/([^\n|])\n(\|)/g, '$1\n\n$2');
-  out = out.replace(/\n{3,}/g, '\n\n');
-  return out;
 }
 
 app.get('/health', (req, res) => {
@@ -134,8 +125,31 @@ app.post('/v1/chat/completions', async (req, res) => {
 
       let buffer = '';
       const decoder = new StringDecoder('utf8');
-      let fullContent = '';
-      let fullReasoning = '';
+      let reasoningStarted = false;
+      let ledgerStarted = false;
+      let held = '';
+      const HOLD_CHARS = 20;
+
+      function filterLedger(newText) {
+        if (!newText) return '';
+        if (ledgerStarted) return '';
+
+        held += newText;
+        const idx = held.search(LEDGER_RE);
+        if (idx !== -1) {
+          ledgerStarted = true;
+          const safe = held.slice(0, idx);
+          held = '';
+          return safe;
+        }
+
+        if (held.length > HOLD_CHARS) {
+          const release = held.slice(0, held.length - HOLD_CHARS);
+          held = held.slice(held.length - HOLD_CHARS);
+          return release;
+        }
+        return '';
+      }
 
       response.data.on('data', chunk => {
         buffer += decoder.write(chunk);
@@ -144,43 +158,45 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         lines.forEach(line => {
           if (!line.startsWith('data: ')) return;
-          if (line.includes('[DONE]')) return;
+          if (line.includes('[DONE]')) { res.write(line + '\n'); return; }
 
           try {
             const data = JSON.parse(line.slice(6));
             const delta = data.choices?.[0]?.delta;
-            if (!delta) return;
-            if (delta.content) fullContent += delta.content;
-            if (delta.reasoning_content) fullReasoning += delta.reasoning_content;
-          } catch (_) {}
+            if (!delta) { res.write(`data: ${JSON.stringify(data)}\n\n`); return; }
+
+            const reasoning = delta.reasoning_content;
+            const content = filterLedger(delta.content);
+
+            if (SHOW_REASONING) {
+              let combined = '';
+              if (reasoning && !reasoningStarted) { combined = '<think>\n' + reasoning; reasoningStarted = true; }
+              else if (reasoning) { combined = reasoning; }
+              if (content && reasoningStarted) { combined += '\n</think>\n\n' + content; reasoningStarted = false; }
+              else if (content) { combined += content; }
+              if (combined) { delta.content = combined; delete delta.reasoning_content; }
+            } else {
+              delta.content = content || '';
+              delete delta.reasoning_content;
+            }
+
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+          } catch (_) {
+            res.write(line + '\n');
+          }
         });
       });
 
       response.data.on('end', () => {
         buffer += decoder.end();
-
-        let finalText = normalizeFormatting(stripHiddenLedger(fullContent));
-        if (SHOW_REASONING && fullReasoning) {
-          finalText = '<think>\n' + fullReasoning + '\n</think>\n\n' + finalText;
-        }
-
-        const CHUNK_SIZE = 12;
-        for (let i = 0; i < finalText.length; i += CHUNK_SIZE) {
-          const piece = {
+        if (!ledgerStarted && held) {
+          const finalChunk = {
             id: `chatcmpl-${Date.now()}`,
             object: 'chat.completion.chunk',
-            choices: [{ index: 0, delta: { content: finalText.slice(i, i + CHUNK_SIZE) }, finish_reason: null }]
+            choices: [{ index: 0, delta: { content: held }, finish_reason: null }]
           };
-          res.write(`data: ${JSON.stringify(piece)}\n\n`);
+          res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
         }
-
-        const finishChunk = {
-          id: `chatcmpl-${Date.now()}`,
-          object: 'chat.completion.chunk',
-          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
-        };
-        res.write(`data: ${JSON.stringify(finishChunk)}\n\n`);
-        res.write('data: [DONE]\n\n');
         res.end();
       });
       response.data.on('error', err => { console.error('Stream error:', err); res.end(); });
@@ -192,7 +208,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         created: Math.floor(Date.now() / 1000),
         model,
         choices: response.data.choices.map(choice => {
-          let fullContent = normalizeFormatting(stripHiddenLedger(choice.message?.content || ''));
+          let fullContent = stripHiddenLedger(choice.message?.content || '');
           if (SHOW_REASONING && choice.message?.reasoning_content) {
             fullContent = '<think>\n' + choice.message.reasoning_content + '\n</think>\n\n' + fullContent;
           }
