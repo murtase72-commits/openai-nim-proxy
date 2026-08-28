@@ -80,7 +80,7 @@ const MODEL_MAPPING = {
   'gpt-4o':         'z-ai/glm-5.2',       // ← GLM-5.2 as the primary "gpt-4o" alias
   'claude-3-opus':  'openai/gpt-oss-120b',
   'claude-3-sonnet':'openai/gpt-oss-20b',
-  'gemini-pro':     'qwen/qwen3-next-80b-a3b-thinking'
+  'gemini-pro':     'moonshotai/kimi-k3'
 };
 
 // ─────────────────────────────────────────────
