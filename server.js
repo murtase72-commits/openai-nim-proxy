@@ -77,7 +77,7 @@ const MODEL_MAPPING = {
   'gpt-3.5-turbo':  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
   'gpt-4':          'deepseek-ai/deepseek-v4-pro-0813',
   'gpt-4-turbo':    'deepseek-ai/deepseek-v4-pro',
-  'gpt-4o':         'z-ai/glm-5.3-flash',       // ← GLM-5.2 as the primary "gpt-4o" alias
+  'gpt-4o':         'z-ai/glm-5.3',       // ← GLM-5.2 as the primary "gpt-4o" alias
   'claude-3-opus':  'openai/gpt-oss-120b',
   'claude-3-sonnet':'openai/gpt-oss-20b',
   'gemini-pro':     'moonshotai/kimi-k3'
